@@ -1,7 +1,7 @@
 import numpy as np
 import random
 from dataclasses import dataclass
-from typing import List, Dict, set
+from typing import List, Dict 
 
 @dataclass
 class Device:
