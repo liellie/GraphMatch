@@ -106,23 +106,53 @@ class EdgeEnvironment:
     def get_exec_time(self, task: Task, device: Device) -> float:
         return task.cpu_cycles / device.cpu_capacity + task.data_size / device.bandwidth
 
+    def get_energy(self, task: Task, device: Device) -> float:
+        return self.get_exec_time(task, device) * device.power_coefficient * device.cpu_capacity
+
 def evaluate_assignment(assignment: Dict, env: EdgeEnvironment, trust: np.ndarray) -> Dict:
     n_devices = len(env.devices)
     device_times = np.zeros(n_devices)
-    total_trust, to_malicious = 0, 0
+    total_trust, total_energy, to_malicious = 0, 0, 0
     sensitive_protected, total_sensitive = 0, 0
+
     for task in env.tasks:
+        if task.task_id not in assignment:
+            continue
         d = assignment[task.task_id]
         device_times[d] += env.get_exec_time(task, env.devices[d])
         total_trust += trust[task.source_device, d]
-        if d in env.malicious_set: to_malicious += 1
+        total_energy += env.get_energy(task, env.devices[d])
+        if d in env.malicious_set:
+            to_malicious += 1
         if task.is_sensitive:
             total_sensitive += 1
-            if d not in env.malicious_set: sensitive_protected += 1
-    jain = (np.sum(device_times)**2) / (n_devices * np.sum(device_times**2) + 1e-8)
+            if d not in env.malicious_set:
+                sensitive_protected += 1
+
+    raw_makespan = device_times.max()
+    effective_makespan = raw_makespan
+    for task in env.tasks:
+        if task.task_id in assignment:
+            d = assignment[task.task_id]
+            if d in env.malicious_set:
+                exec_time = env.get_exec_time(task, env.devices[d])
+                effective_makespan += exec_time * 10 if task.is_sensitive else exec_time * 0.8
+
+    jain = ((np.sum(device_times) ** 2) /
+            (n_devices * np.sum(device_times ** 2) + 1e-8)
+            if np.sum(device_times) > 0 else 0.0)
+    n_tasks = len(env.tasks)
+
     return {
-        'avg_trust': total_trust / len(env.tasks),
-        'security_score': (len(env.tasks) - to_malicious) / len(env.tasks) * 100,
-        'sensitive_protection': sensitive_protected / total_sensitive * 100 if total_sensitive > 0 else 100,
-        'jain_index': jain
+        'avg_trust':            total_trust / n_tasks,
+        'raw_makespan':         raw_makespan,
+        'effective_makespan':   effective_makespan,
+        'energy':               total_energy,
+        'to_malicious':         to_malicious,
+        'security_score':       (n_tasks - to_malicious) / n_tasks * 100,
+        'sensitive_protection': (sensitive_protected / total_sensitive * 100
+                                 if total_sensitive > 0 else 100.0),
+        'jain_index':           jain,
+        'load_std':             float(np.std(device_times)),
+        'utilization':          float(np.sum(device_times > 0) / n_devices * 100),
     }
